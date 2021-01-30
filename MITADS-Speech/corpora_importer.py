@@ -20,12 +20,13 @@ logging.basicConfig(level=logging.DEBUG)
 import sox
 from charset_normalizer import CharsetNormalizerMatches as CnM
 
-from ds_ctcdecoder import Alphabet  
+##from ds_ctcdecoder import Alphabet  
+import csv
 
 SAMPLE_RATE = 16000
 BITDEPTH = 16
 N_CHANNELS = 1
-MAX_SECS = 15 ##20
+MAX_SECS = 60 ##20
 MIN_SECS = 0 # 1 ##zero second audio (probably) means one-word speech
 
 AUDIO_EXTENSIONS = [".wav", ".mp3"]
@@ -34,7 +35,7 @@ AUDIO_MP3_EXTENSIONS = [".mp3"]
 
 ##DeepSpeech training code require all csv start whith columns "wav_filename", "wav_filesize", "transcript"
 FIELDNAMES_CSV_MINIMAL = ["wav_filename", "wav_filesize", "transcript"]
-FIELDNAMES_CSV_FULL = ["wav_filename", "wav_filesize", "transcript","speaker_id","","duration","comments"]
+FIELDNAMES_CSV_FULL = ["wav_filename", "wav_filesize", "transcript","speaker_id","duration","comments"]
 
 def is_audio_file(filepath):
     return any(
@@ -88,9 +89,6 @@ class Corpus:
         self.datasets_sizes = datasets_sizes
         self.make_wav_resample = make_wav_resample
 
-    ## must be implemented in importer if exist speaker id information
-    def get_speaker_id(self,audio_file_path):
-        return ""
 
 
 class ArchiveImporter:
@@ -113,10 +111,17 @@ class ArchiveImporter:
         
         self.origin_data_path = os.path.join(self.dataset_path, "origin") if data_dir==None else  data_dir
         
-        self.dataset_output_path = os.path.abspath(self.corpus_name) if output_path==None else os.path.join(output_path, self.corpus_name) 
+        self.dataset_output_path = os.path.join(os.path.abspath(self.corpus_name), "importers_output")  if output_path==None else os.path.join(output_path, self.corpus_name) 
         self.csv_append_mode = csv_append_mode
         self.filter_max_secs = MAX_SECS ##filter for single clips max duration in second
         self.filter_min_secs = MIN_SECS ##filter for single clips min duration in second
+
+        if(data_dir!=None):
+            self.csv_wav_absolute_path = True
+        else:
+            ##default
+            ##relative path from importers_output
+            self.csv_wav_absolute_path = False
 
     def run(self):
         self._download_and_preprocess_data()
@@ -165,6 +170,9 @@ class ArchiveImporter:
     def get_corpus(self) -> Corpus :    
         print('must be implemented in importer')
 
+    ## OPTIONAL: must be implemented in importer if exist speaker id information
+    def get_speaker_id(self,audio_file_path):
+        return ""
 
     def _maybe_convert_sets(self,corpus:Corpus):
 
@@ -236,6 +244,10 @@ class ArchiveImporter:
             comments=completedProcess.stdout.decode("utf-8", "ignore")
           except:
             pass
+
+        if(len(comments)>0):
+            comments = comments.replace('\r', '')## 
+            comments = comments.replace('\n', '|')## \n is csv line separator
 
 
         if(make_wav_resample):
@@ -372,13 +384,13 @@ class ArchiveImporter:
 
     def _write_csv(self,corpus:Corpus,filtered_rows):
 
-        print(f"Writing CSV file")
+        print("\n")
+        print("Writing CSV files")
         audios = corpus.audios
         utterences = corpus.utterences
-        csv = []
+        csv_data = []
 
         csv_columns = FIELDNAMES_CSV_FULL
-        csv_columns_str = ','.join(csv_columns)
 
         samples_len = len(audios)
         for _file in audios:
@@ -395,23 +407,45 @@ class ArchiveImporter:
             
             duration = row_data[3]
             comments = row_data[4]
+            
+            ##file original was resampled in wav 
+            wav_filename = path.splitext(_file)[0] + ".wav"
 
-            st = os.stat(_file)
+            st = os.stat(wav_filename)
             file_size = st.st_size
             utterence = utterences[_file]
 
             utterence_clean = utterence      
-            speaker_id = corpus.get_speaker_id(_file)
-            ##make relative path audio file
-            _file_relative_path =  _file.replace(self.origin_data_path,'') 
-            _file_relative_path = ''.join(['/' if c=='\\' or c=='/' else c for c in _file_relative_path])[1:]           
+
+            speaker_id = ''
+            try:
+                speaker_id = self.get_speaker_id(_file)
+            except Exception as e:
+                print('get_speaker_id error: ' + str(e))            
             
-            csv_line = f"{_file_relative_path},{file_size},{utterence_clean},{speaker_id},{duration},{comments}\n"
-            csv.append(csv_line)
+            wav_file_path = None
+            if(self.csv_wav_absolute_path):
+                ## audio file 
+                #   audio files and  output csv are on different paths
+                ##audio file absolute path
+                wav_file_path = os.path.abspath(wav_filename)
+            else:                 
+                ##make relative path audio file
+                wav_file_path =  os.path.relpath(wav_filename, self.origin_data_path)                
+   
+            csv_row =  dict(
+                            wav_filename=wav_file_path,
+                            wav_filesize=file_size,
+                            transcript=utterence_clean,
+                            speaker_id=speaker_id,
+                            duration=duration,
+                            comments=comments
+                        )
+            csv_data.append(csv_row)
 
         #shuffle set
         random.seed(76528)
-        random.shuffle(csv)
+        random.shuffle(csv_data)
 
         train_len = int(samples_len*corpus.datasets_sizes[0])
         test_len = int(samples_len*corpus.datasets_sizes[1])
@@ -419,35 +453,41 @@ class ArchiveImporter:
             raise('size of the test dataset must be less than {}'.format(str(samples_len-train_len)))
 
         dev_len = samples_len - train_len - test_len
-        train_data = csv[:train_len]
-        dev_data = csv[train_len:train_len+test_len]
-        test_data = csv[train_len+test_len:]
+        train_data = csv_data[:train_len]
+        dev_data = csv_data[train_len:train_len+test_len]
+        test_data = csv_data[train_len+test_len:]
 
         file_open_mode = 'a' if self.csv_append_mode else 'w'
-        with open(os.path.join(self.dataset_output_path, "train_full.csv"), file_open_mode,encoding='utf-8') as fd:
-            
-            if(not self.csv_append_mode):
-                fd.write(csv_columns_str + "\n")
-            
-            for i in csv:
-                fd.write(i)
-        with open(os.path.join(self.dataset_output_path, "train.csv"), file_open_mode,encoding='utf-8') as fd:
-            if(not self.csv_append_mode):
-                fd.write(csv_columns_str + "\n")
-            for i in train_data:
-                fd.write(i)
-        with open(os.path.join(self.dataset_output_path, "dev.csv"), file_open_mode,encoding='utf-8') as fd:
-            if(not self.csv_append_mode):
-                fd.write(csv_columns_str + "\n")
-            for i in dev_data:
-                fd.write(i)
-        with open(os.path.join(self.dataset_output_path, "test.csv"), file_open_mode,encoding='utf-8') as fd:
-            if(not self.csv_append_mode):
-                fd.write(csv_columns_str + "\n")
-            for i in test_data:
-                fd.write(i)
 
-        print(f"Wrote {len(csv)} entries")
+        target_csv_template = os.path.join(self.dataset_output_path, "{}.csv") 
+        with open(target_csv_template.format("train_full"), file_open_mode, encoding="utf-8", newline="") as train_full_csv_file:  
+            with open(target_csv_template.format("train"), file_open_mode, encoding="utf-8", newline="") as train_csv_file:  
+                with open(target_csv_template.format("dev"), file_open_mode, encoding="utf-8", newline="") as dev_csv_file:  
+                    with open(target_csv_template.format("test"), file_open_mode, encoding="utf-8", newline="") as test_csv_file:  
+                        
+                        train_full_writer = csv.DictWriter(train_full_csv_file, dialect='excel-tab', fieldnames=FIELDNAMES_CSV_FULL)
+                        train_full_writer.writeheader()
+                        train_writer = csv.DictWriter(train_csv_file, dialect='excel-tab', fieldnames=FIELDNAMES_CSV_FULL)
+                        train_writer.writeheader()
+                        dev_writer = csv.DictWriter(dev_csv_file, dialect='excel-tab', fieldnames=FIELDNAMES_CSV_FULL)
+                        dev_writer.writeheader()
+                        test_writer = csv.DictWriter(test_csv_file, dialect='excel-tab', fieldnames=FIELDNAMES_CSV_FULL)
+                        test_writer.writeheader()
+                        
+                        ##train full
+                        for row in csv_data:
+                            train_full_writer.writerow(row)
+                        ##train
+                        for row in train_data:
+                            train_writer.writerow(row)
+                        ##dev
+                        for row in dev_data:
+                            dev_writer.writerow(row)
+                        ##test
+                        for row in test_data:
+                            test_writer.writerow(row)
+
+        print(f"Wrote {len(csv_data)} entries")
 
 
     
