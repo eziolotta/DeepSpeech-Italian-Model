@@ -36,7 +36,7 @@ class MAILabsImporter(ArchiveImporter):
         with open( os.path.join(self.dataset_output_path,'mailabs_fixed_token.txt') , 'w',encoding='utf-8') as out:
             for key, value in fixed_token.items():
                 out.write(key + ' ' + value + '\n')
-                    
+
 
     def get_corpus(self):
         SKIP_LIST = [] ## filter(None, CLI_ARGS.skiplist.split(","))
@@ -110,8 +110,8 @@ if __name__ == "__main__":
     archivie_url = 'https://www.caito.de/data/Training/stt_tts/it_IT.tgz'
 
     data_dir = None
-    data_dir = 'F:\\DATASET-MODELS\\speech_dataset\\CORPORA-IT-AUDIO\\M-AILABS'
-    output_path = 'F:\\DATASET-MODELS\\speech_dataset\\new-speech-corpora-it'
+    data_dir = None
+    output_path = None
     m_ailabs_importer = MAILabsImporter(corpus_name,archivie_url,data_dir=data_dir,output_path=output_path)
     
     m_ailabs_importer.run()

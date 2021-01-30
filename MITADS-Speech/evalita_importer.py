@@ -51,8 +51,8 @@ if __name__ == "__main__":
     corpus_name=CORPUS_NAME
     archivie_url = 'http://www.evalita.it/sites/evalita.fbk.eu/files/doc2009/evalita2009srt.zip'
 
-    data_dir = 'F:\DATASET-MODELS\speech_dataset\CORPORA-IT-AUDIO\EVALITA2009'
-    output_path = 'F:\\DATASET-MODELS\\speech_dataset\\new-speech-corpora-it'
+    data_dir = None
+    output_path = None
     evalita_importer = EvalitaImporter(corpus_name,archivie_url,data_dir=data_dir,output_path=output_path)
     
     evalita_importer.run()

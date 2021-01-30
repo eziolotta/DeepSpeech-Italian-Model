@@ -26,7 +26,7 @@ import csv
 SAMPLE_RATE = 16000
 BITDEPTH = 16
 N_CHANNELS = 1
-MAX_SECS = 60 ##20
+MAX_SECS = 60 ##20  an additional duration filter will be applied by the corpora_collector for the final corpus
 MIN_SECS = 0 # 1 ##zero second audio (probably) means one-word speech
 
 AUDIO_EXTENSIONS = [".wav", ".mp3"]
